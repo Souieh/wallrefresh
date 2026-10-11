@@ -1,0 +1,42 @@
+# wallrefresh configuration  ->  copy to ~/.config/wallrefresh.conf
+# This file holds API keys: never commit your real copy.
+
+# --- general ---------------------------------------------------------------
+PROVIDER=wallhaven                      # unsplash | wallhaven | pixabay | picsum | random
+ROTATE=(unsplash wallhaven pixabay)     # pool used when PROVIDER=random
+WIDTH=1920
+HEIGHT=1080
+# WALLPAPER_DIR=/usr/local/share/wallpapers   # must be writable by you, readable by others
+
+# --- unsplash (free key: unsplash.com/developers; keywords only) ------------
+UNSPLASH_KEY=""
+UNSPLASH_QUERIES=(landscape mountains forest ocean cityscape architecture abstract galaxy nebula microscope)
+
+# --- wallhaven ("categories|keyword"; 100=general 010=anime 001=people) -----
+# No key needed for SFW. Leave empty unless you have a real Wallhaven key.
+WALLHAVEN_KEY=""
+WALLHAVEN_PRESETS=(
+  "100|landscape"
+  "100|scenery"
+  "100|cityscape"
+  "100|abstract"
+  "100|space"
+  "100|science"
+  "010|landscape"
+  "010|scenery"
+  "010|city"
+)
+WALLHAVEN_EXCLUDE="-woman -girl -man -people -portrait"
+WALLHAVEN_RATIOS="16x9"
+
+# --- pixabay ("category|keyword"; free key: pixabay.com/api/docs) -----------
+PIXABAY_KEY=""
+PIXABAY_PRESETS=(
+  "nature|landscape"
+  "places|scenery"
+  "travel|mountains"
+  "buildings|cityscape"
+  "backgrounds|abstract"
+  "science|space"
+  "science|science"
+)

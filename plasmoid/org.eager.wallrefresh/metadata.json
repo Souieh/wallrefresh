@@ -1,0 +1,13 @@
+{
+  "KPlugin": {
+    "Id": "org.eager.wallrefresh",
+    "Name": "Wallpaper Refresh",
+    "Description": "Preview the current wallpaper and fetch a new one",
+    "Icon": "preferences-desktop-wallpaper",
+    "Authors": [{ "Name": "EaGer" }],
+    "Version": "1.0",
+    "License": "GPL-2.0+"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}

@@ -1,0 +1,5 @@
+# real config contains API keys
+wallrefresh.conf
+*.conf
+!*.conf.example
+*.tar.gz

@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# wallrefresh - fetch a random wallpaper from a chosen provider and apply it to
+# the Plasma desktop, the lock screen and (via symlink) the login screen.
+#
+# Usage: wallrefresh [provider|random|list]
+set -euo pipefail
+
+CONF="${WALLREFRESH_CONF:-$HOME/.config/wallrefresh.conf}"
+[ -r "$CONF" ] || { echo "Config not found: $CONF (copy config/wallrefresh.conf.example)" >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$CONF"
+
+DIR="${WALLPAPER_DIR:-/usr/local/share/wallpapers}"
+STATE="$HOME/.cache/wallrefresh"
+mkdir -p "$STATE"
+
+# Only one refresh at a time (timer + widget could overlap)
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "Another refresh is already running" >&2; exit 0; }
+
+# Providers write a human-readable title here; it ends up in the widget
+TITLE_FILE=$(mktemp)
+trap 'rm -f "$TITLE_FILE"' EXIT
+
+pick() { printf '%s\n' "$@" | shuf -n1; }
+
+# ---------------------------------------------------------------------------
+# Providers: print the image URL on line 1 (optional line 2 = download ping),
+# write a title to $TITLE_FILE, or return non-zero on failure.
+# To add one, define p_<name>() and it shows up in `wallrefresh list`.
+# ---------------------------------------------------------------------------
+
+p_unsplash() {
+  [ -n "${UNSPLASH_KEY:-}" ] || { echo "unsplash: UNSPLASH_KEY not set" >&2; return 1; }
+  local q json raw
+  q=$(pick "${UNSPLASH_QUERIES[@]}")
+  json=$(curl -fsS -G "https://api.unsplash.com/photos/random" \
+    -H "Authorization: Client-ID $UNSPLASH_KEY" \
+    --data-urlencode "query=$q" \
+    --data-urlencode "orientation=landscape" \
+    --data-urlencode "content_filter=high") || return 1
+  raw=$(jq -r '.urls.raw // empty' <<<"$json")
+  [ -n "$raw" ] || return 1
+  jq -r --arg q "$q" '"Unsplash · " + ((.description // .alt_description // $q) | gsub("[\r\n]+";" ")) + " — " + .user.name' <<<"$json" > "$TITLE_FILE"
+  echo "${raw}&w=${WIDTH}&h=${HEIGHT}&fit=crop&fm=jpg&q=85"
+  jq -r '.links.download_location // empty' <<<"$json"
+}
+
+p_wallhaven() {
+  local preset cat q extra=()
+  preset=$(pick "${WALLHAVEN_PRESETS[@]}")
+  cat=${preset%%|*}; q=${preset#*|}
+  if [ -n "${WALLHAVEN_KEY:-}" ]; then extra=(--data-urlencode "apikey=$WALLHAVEN_KEY"); fi
+  echo "Wallhaven · $q" > "$TITLE_FILE"
+  curl -fsS -G "https://wallhaven.cc/api/v1/search" \
+    --data-urlencode "q=$q $WALLHAVEN_EXCLUDE" \
+    --data-urlencode "categories=$cat" \
+    --data-urlencode "purity=100" \
+    --data-urlencode "atleast=${WIDTH}x${HEIGHT}" \
+    --data-urlencode "ratios=$WALLHAVEN_RATIOS" \
+    --data-urlencode "sorting=random" \
+    "${extra[@]}" \
+  | jq -re '.data[].path' | shuf -n1
+}
+
+p_pixabay() {
+  [ -n "${PIXABAY_KEY:-}" ] || { echo "pixabay: PIXABAY_KEY not set" >&2; return 1; }
+  local preset cat q url
+  preset=$(pick "${PIXABAY_PRESETS[@]}")
+  cat=${preset%%|*}; q=${preset#*|}
+  fetch() {
+    curl -fsS -G "https://pixabay.com/api/" \
+      --data-urlencode "key=$PIXABAY_KEY" \
+      --data-urlencode "q=$q" \
+      --data-urlencode "category=$cat" \
+      --data-urlencode "image_type=photo" \
+      --data-urlencode "orientation=horizontal" \
+      --data-urlencode "min_width=$WIDTH" \
+      --data-urlencode "min_height=$HEIGHT" \
+      --data-urlencode "safesearch=true" \
+      --data-urlencode "per_page=50" \
+      --data-urlencode "page=$1" \
+    | jq -r '.hits[] | (.fullHDURL // .largeImageURL)' | shuf -n1
+  }
+  url=$(fetch $((RANDOM % 5 + 1)) || true)
+  [ -n "$url" ] || url=$(fetch 1 || true)
+  [ -n "$url" ] || return 1
+  echo "Pixabay · $q ($cat)" > "$TITLE_FILE"
+  echo "$url"
+}
+
+p_picsum() {
+  echo "Picsum · random" > "$TITLE_FILE"
+  echo "https://picsum.photos/${WIDTH}/${HEIGHT}.jpg?random=$RANDOM"
+}
+
+# ---------------------------------------------------------------------------
+# Choose provider
+# ---------------------------------------------------------------------------
+arg=${1:-$PROVIDER}
+if [ "$arg" = "list" ]; then
+  declare -F | awk '{print $3}' | grep '^p_' | sed 's/^p_//'
+  exit 0
+fi
+
+if [ "$arg" = "random" ]; then
+  mapfile -t order < <(printf '%s\n' "${ROTATE[@]}" | shuf)   # shuffled; failures fall through
+else
+  order=("$arg")
+fi
+
+URL=""; PING=""; used=""
+for p in "${order[@]}"; do
+  declare -F "p_$p" >/dev/null || { echo "Unknown provider: $p (try: wallrefresh list)" >&2; exit 1; }
+  if out=$("p_$p"); then
+    URL=$(sed -n 1p <<<"$out"); PING=$(sed -n 2p <<<"$out")
+    if [ -n "$URL" ]; then used=$p; break; fi
+  fi
+  echo "$p failed, trying next..." >&2
+done
+[ -n "$URL" ] || { echo "All providers failed" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Download and apply
+# ---------------------------------------------------------------------------
+new="$DIR/wall-$(date +%s).jpg"
+curl -fsSL "$URL" -o "$new"
+[ -s "$new" ] || { echo "Empty download" >&2; rm -f "$new"; exit 1; }
+
+if [ "$used" = unsplash ] && [ -n "$PING" ]; then   # required by Unsplash API guidelines
+  curl -fsS -H "Authorization: Client-ID $UNSPLASH_KEY" "$PING" >/dev/null || true
+fi
+
+find "$DIR" -name 'wall-*.jpg' ! -name "$(basename "$new")" -delete
+
+ln -sfn "$new" "$DIR/login.jpg"                                   # login screen
+plasma-apply-wallpaperimage "$new"                                # desktop
+kwriteconfig6 --file kscreenlockerrc --group Greeter --key WallpaperPlugin org.kde.image
+kwriteconfig6 --file kscreenlockerrc --group Greeter --group Wallpaper \
+  --group org.kde.image --group General --key Image "file://$new" # lock screen
+
+# State for the panel widget: line 1 = image path, line 2 = title
+printf '%s\n%s\n' "$new" "$(cat "$TITLE_FILE")" > "$STATE/current.tmp" \
+  && mv "$STATE/current.tmp" "$STATE/current.txt"
+
+echo "Wallpaper set from $used"
